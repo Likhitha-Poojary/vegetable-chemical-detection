@@ -7,45 +7,61 @@ import adafruit_mcp3xxx.mcp3008 as MCP
 from adafruit_mcp3xxx.analog_in import AnalogIn
 import adafruit_dht
 
-# --- GPIO Pin Mapping ---
-PIN_SERVO = 18       # SG90/MG90S Servo PWM
-PIN_BUZZER = 23      # Active Buzzer
-PIN_MOTOR_IN1 = 24   # L298N Conveyor IN1
-PIN_MOTOR_IN2 = 25   # L298N Conveyor IN2
-PIN_MOTOR_ENA = 12   # L298N Speed PWM
-PIN_DHT11 = board.D4 # DHT11 Data Pin
+# --- GPIO Pin Mapping (Physical to BCM Translation) ---
+PIN_SERVO = 18       # Physical Pin 12 (Hardware PWM0)
+PIN_BUZZER = 23      # Physical Pin 16
+PIN_MOTOR_IN1 = 17   # Physical Pin 11
+PIN_MOTOR_IN2 = 27   # Physical Pin 13
+PIN_MOTOR_ENA = 12   # Physical Pin 32 (Hardware PWM0 alternative to avoid Pin 12 conflict)
+PIN_DHT11 = board.D4 # Physical Pin 7
 
-# TCS3200 Color Sensor Pins (Conflict-Free)
-PIN_S0 = 17
-PIN_S1 = 27
-PIN_S2 = 22
-PIN_S3 = 5
-PIN_OUT = 6
+# TCS3200 Color Sensor Pins (Physical Pins 29, 31, 35, 33, 37)
+PIN_S0 = 5           # Physical Pin 29
+PIN_S1 = 6           # Physical Pin 31
+PIN_S2 = 19          # Physical Pin 35
+PIN_S3 = 13          # Physical Pin 33
+PIN_OUT = 26         # Physical Pin 37
 
 # --- Setup GPIO ---
 GPIO.setmode(GPIO.BCM)
 GPIO.setwarnings(False)
 
-for pin in [PIN_BUZZER, PIN_MOTOR_IN1, PIN_MOTOR_IN2, PIN_MOTOR_ENA, PIN_S0, PIN_S1, PIN_S2, PIN_S3]:
-    GPIO.setup(pin, GPIO.OUT)
-GPIO.setup(PIN_OUT, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-GPIO.setup(PIN_SERVO, GPIO.OUT)
+output_pins = [
+    PIN_BUZZER,
+    PIN_MOTOR_IN1,
+    PIN_MOTOR_IN2,
+    PIN_MOTOR_ENA,
+    PIN_S0,
+    PIN_S1,
+    PIN_S2,
+    PIN_S3,
+    PIN_SERVO
+]
 
-servo_pwm = GPIO.PWM(PIN_SERVO, 50) # 50Hz
+for pin in output_pins:
+    GPIO.setup(pin, GPIO.OUT)
+
+GPIO.setup(PIN_OUT, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+
+# Setup PWM Channels
+servo_pwm = GPIO.PWM(PIN_SERVO, 50)   # 50Hz for SG90/MG90S Servo
 servo_pwm.start(0)
 
-motor_pwm = GPIO.PWM(PIN_MOTOR_ENA, 100) # 100Hz
+motor_pwm = GPIO.PWM(PIN_MOTOR_ENA, 100) # 100Hz for DC motor speed control
 motor_pwm.start(0)
 
 # Set TCS3200 Frequency Scaling to 20%
 GPIO.output(PIN_S0, GPIO.HIGH)
 GPIO.output(PIN_S1, GPIO.LOW)
 
-# Setup MCP3008 ADC (SPI) for MQ-135
+# Setup MCP3008 ADC via Hardware SPI (Pins 19, 21, 23, 24)
 spi = busio.SPI(clock=board.SCK, MISO=board.MISO, MOSI=board.MOSI)
 cs = digitalio.DigitalInOut(board.D8)
 mcp = MCP.MCP3008(spi, cs)
-mq135_channel = AnalogIn(mcp, MCP.P0)
+
+# Analog Sensor Channels
+ldr_channel = AnalogIn(mcp, MCP.P0)    # LDR optical sensor on CH0
+mq135_channel = AnalogIn(mcp, MCP.P1)  # MQ-135 gas sensor on CH1
 
 # Setup DHT11 Sensor
 dht_sensor = adafruit_dht.DHT11(PIN_DHT11)
@@ -69,16 +85,16 @@ def read_tcs3200_channel(s2_val, s3_val):
 
 def run_hardware_diagnostics():
     print("========================================")
-    print("   REAL HARDWARE DIAGNOSTICS SUITE      ")
+    print("    REAL HARDWARE DIAGNOSTICS SUITE      ")
     print("========================================")
-    
-    print("\n[1] Testing Active Buzzer...")
+
+    print("\n[1] Testing Active Buzzer (Pin 16 / GPIO 23)...")
     GPIO.output(PIN_BUZZER, GPIO.HIGH)
     time.sleep(0.2)
     GPIO.output(PIN_BUZZER, GPIO.LOW)
     print(" -> Buzzer: OK")
 
-    print("\n[2] Testing Deflection Servo Arm...")
+    print("\n[2] Testing Deflection Servo Arm (Pin 12 / GPIO 18)...")
     set_servo_angle(90)
     time.sleep(1)
     set_servo_angle(0)
@@ -92,18 +108,23 @@ def run_hardware_diagnostics():
     motor_pwm.ChangeDutyCycle(0)
     print(" -> Motor: OK")
 
-    print("\n[4] Reading MQ-135 Gas Sensor via MCP3008 ADC...")
-    voltage = mq135_channel.voltage
-    raw_adc = mq135_channel.value
-    print(f" -> Voltage: {voltage:.2f} V | Raw ADC Value: {raw_adc}")
+    print("\n[4] Reading LDR Sensor (MCP3008 Channel 0)...")
+    ldr_voltage = ldr_channel.voltage
+    ldr_raw = ldr_channel.value
+    print(f" -> LDR Voltage: {ldr_voltage:.2f} V | Raw ADC Value: {ldr_raw}")
 
-    print("\n[5] Reading TCS3200 Color Sensor Frequencies...")
+    print("\n[5] Reading MQ-135 Gas Sensor (MCP3008 Channel 1)...")
+    mq135_voltage = mq135_channel.voltage
+    mq135_raw = mq135_channel.value
+    print(f" -> MQ-135 Voltage: {mq135_voltage:.2f} V | Raw ADC Value: {mq135_raw}")
+
+    print("\n[6] Reading TCS3200 Color Sensor Frequencies...")
     r = read_tcs3200_channel(GPIO.LOW, GPIO.LOW)
     b = read_tcs3200_channel(GPIO.LOW, GPIO.HIGH)
     g = read_tcs3200_channel(GPIO.HIGH, GPIO.HIGH)
     print(f" -> Spectral Frequencies: R={r} | G={g} | B={b}")
 
-    print("\n[6] Reading DHT11 Sensor...")
+    print("\n[7] Reading DHT11 Sensor (Pin 7 / GPIO 4)...")
     try:
         t = dht_sensor.temperature
         h = dht_sensor.humidity
